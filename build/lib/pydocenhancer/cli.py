@@ -9,8 +9,8 @@ def cli():
 @cli.command()
 @click.option("--module", required=True, help="Path to Python module")
 @click.option("--output", default="docs", help="Output directory for documentation")
-@click.option("--provider", required=True, help="AI provider (openai, local [ctransformers, ollama])")
-@click.option("--model", required=True, help="Model name (e.g., llama3.2, ollama/llama3.2:latest)")
+@click.option("--provider", default="mock", help="AI provider (mock, openai, local [ctransformers])")
+@click.option("--model", default="mock-model", help="Model name (e.g., llama3.2)")
 @click.option("--api-key", default=None, help="API key for cloud providers")
 @click.option("--language", default="en", help="Language code for documentation (e.g., en, fr, es, zh)")
 def enhance(module, output, provider, model, api_key, language):

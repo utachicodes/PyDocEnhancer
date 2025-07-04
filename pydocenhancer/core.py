@@ -8,14 +8,16 @@ import contextlib
 import requests
 
 class DocEnhancer:
-    def __init__(self, provider: str = "mock", api_key: str = None, model: str = "mock-model", language: str = "en"):
+    def __init__(self, provider: str, api_key: str = None, model: str = None, language: str = "en"):
         """
         Initialize PyDocEnhancer with an AI provider.
-        :param provider: AI provider ("mock", "openai", "local").
+        :param provider: AI provider ("openai", "local").
         :param api_key: API key for cloud providers (optional).
         :param model: Model name for LLM (e.g., "llama3.2" for local).
         :param language: Output language for documentation (default: "en").
         """
+        if provider is None or provider == "mock":
+            raise ValueError("A real LLM provider is required. Please specify --provider local or --provider openai and a valid model.")
         self.provider = provider
         self.api_key = api_key
         self.model = model
@@ -28,31 +30,48 @@ class DocEnhancer:
             import openai
             openai.api_key = self.api_key
             return openai
-        elif self.provider == "local" and "ollama" in self.model.lower():
+        elif self.provider == "local" and self.model and "ollama" in self.model.lower():
             # No client needed, will use requests to localhost
             return "ollama"
         elif self.provider == "local":
-            from llama_cpp import Llama
-            return Llama(model_path=self.model)
-        return None
+            try:
+                from ctransformers import AutoModelForCausalLM
+                llm = AutoModelForCausalLM.from_pretrained(self.model)
+                return llm
+            except ImportError:
+                raise ImportError("ctransformers is required for local LLMs. Install with 'pip install pydocenhancer[local]'.")
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}. Supported providers are 'openai' and 'local'.")
 
     def _llm_ollama(self, prompt: str) -> str:
-        # Assumes Ollama is running locally with the desired model pulled
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": self.model.split("/", 1)[-1], "prompt": prompt, "stream": False},
-            timeout=60
-        )
-        response.raise_for_status()
-        return response.json()["response"].strip()
+        try:
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={"model": self.model.split("/", 1)[-1], "prompt": prompt, "stream": False},
+                timeout=60
+            )
+            response.raise_for_status()
+            return response.json()["response"].strip()
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Ollama LLM request failed: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error from Ollama LLM: {e}")
 
     def _llm_openai(self, prompt: str) -> str:
-        completion = self.llm.ChatCompletion.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        return completion.choices[0].message.content.strip()
+        try:
+            completion = self.llm.ChatCompletion.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            raise RuntimeError(f"OpenAI LLM request failed: {e}")
+
+    def _llm_local(self, prompt: str) -> str:
+        if not self.llm:
+            raise RuntimeError("Local LLM is not initialized.")
+        return self.llm(prompt)
 
     def _llm(self, text: str, task: str, language: str = None) -> str:
         lang = language or self.language
@@ -70,44 +89,72 @@ class DocEnhancer:
 
         if self.provider == "openai":
             return self._llm_openai(prompt)
-        elif self.provider == "local" and "ollama" in self.model.lower():
+        elif self.provider == "local" and self.model and "ollama" in self.model.lower():
             return self._llm_ollama(prompt)
+        elif self.provider == "local":
+            return self._llm_local(prompt)
         else:
-            return self._mock_llm(text, task, lang)
-
-    def _mock_llm(self, text: str, task: str, language: Optional[str] = None) -> str:
-        """Mock LLM response for demo purposes."""
-        lang = language or self.language
-        if task == "summarize":
-            return f"[{lang}] Summary of {text[:50]}...: This code performs a specific function."
-        elif task == "explain":
-            return f"[{lang}] Explanation of {text[:50]}...: This function processes input data."
-        elif task == "translate":
-            return f"[{lang}] {text}"
-        elif task == "example":
-            return f"# Example usage in {lang}\n{text}"
-        return ""
+            raise ValueError("A real LLM provider is required. The 'mock' provider is not supported.")
 
     def parse_module(self, module_path: str) -> List[Dict]:
         """Parse a Python module and extract function details."""
-        with open(module_path, "r") as file:
-            code = file.read()
-        tree = ast.parse(code)
+        try:
+            with open(module_path, "r") as file:
+                code = file.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Module file not found: {module_path}")
+        except PermissionError:
+            raise PermissionError(f"Permission denied when reading: {module_path}")
+        except Exception as e:
+            raise RuntimeError(f"Error reading file {module_path}: {e}")
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            raise SyntaxError(f"Syntax error in {module_path}: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Error parsing AST for {module_path}: {e}")
         functions = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 func_name = node.name
                 docstring = ast.get_docstring(node) or "No docstring"
-                source = inspect.getsource(getattr(inspect.getmodule(node), func_name, None))
+                # Safely extract source code from the AST node
+                try:
+                    # Try to use ast.unparse (Python 3.9+)
+                    source = ast.unparse(node)
+                except AttributeError:
+                    # Fallback for older Python versions: extract from original code
+                    source_lines = code.splitlines()
+                    start_line = node.lineno - 1  # AST line numbers are 1-indexed
+                    end_line = node.end_lineno if hasattr(node, 'end_lineno') else start_line + 1
+                    source = '\n'.join(source_lines[start_line:end_line])
+                except Exception as e:
+                    source = f"Error extracting source: {e}"
                 example = self.extract_example_from_docstring(docstring)
+                try:
+                    docstring_translated = self._llm(docstring, "translate", self.language)
+                except Exception as e:
+                    docstring_translated = f"Error from LLM: {e}"
+                try:
+                    summary = self._llm(docstring, "summarize", self.language)
+                except Exception as e:
+                    summary = f"Error from LLM: {e}"
+                try:
+                    explanation = self._llm(source, "explain", self.language)
+                except Exception as e:
+                    explanation = f"Error from LLM: {e}"
+                try:
+                    example_out = self._llm(source, "example", self.language)
+                except Exception as e:
+                    example_out = f"Error from LLM: {e}"
                 functions.append({
                     "name": func_name,
-                    "docstring": self._llm(docstring, "translate", self.language),
+                    "docstring": docstring_translated,
                     "source": source,
-                    "summary": self._llm(docstring, "summarize", self.language),
-                    "explanation": self._llm(source, "explain", self.language),
-                    "example": self._llm(source, "example", self.language),
+                    "summary": summary,
+                    "explanation": explanation,
+                    "example": example_out,
                     "example_test_result": self.test_example_code(example) if example else None
                 })
         return functions
@@ -146,21 +193,30 @@ class DocEnhancer:
     def generate_docs(self, module_path: str, output_dir: str, language: Optional[str] = None) -> None:
         """Generate markdown documentation for a module, optionally in a different language."""
         if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+            try:
+                os.makedirs(output_dir)
+            except Exception as e:
+                raise RuntimeError(f"Could not create output directory {output_dir}: {e}")
         lang = language or self.language
-        functions = self.parse_module(module_path)
+        try:
+            functions = self.parse_module(module_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse module: {e}")
         output_file = os.path.join(output_dir, f"{os.path.basename(module_path)}.{lang}.md")
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(f"# Documentation for {os.path.basename(module_path)} [{lang}]\n\n")
-            for func in functions:
-                f.write(f"## Function: {func['name']}\n")
-                f.write(f"**Docstring**: {self._llm(func['docstring'], 'translate', lang)}\n\n")
-                f.write(f"**Summary**: {self._llm(func['docstring'], 'summarize', lang)}\n\n")
-                f.write(f"**Explanation**: {self._llm(func['source'], 'explain', lang)}\n\n")
-                if func['example']:
-                    f.write(f"**Example**:\n```python\n{func['example']}\n```\n\n")
-                    f.write(f"**Example Test Result**: {func['example_test_result']}\n\n")
-                f.write("```python\n" + func['source'] + "\n```\n\n")
+        try:
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(f"# Documentation for {os.path.basename(module_path)} [{lang}]\n\n")
+                for func in functions:
+                    f.write(f"## Function: {func['name']}\n")
+                    f.write(f"**Docstring**: {func['docstring']}\n\n")
+                    f.write(f"**Summary**: {func['summary']}\n\n")
+                    f.write(f"**Explanation**: {func['explanation']}\n\n")
+                    if func['example']:
+                        f.write(f"**Example**:\n```python\n{func['example']}\n```\n\n")
+                        f.write(f"**Example Test Result**: {func['example_test_result']}\n\n")
+                    f.write("```python\n" + func['source'] + "\n```\n\n")
+        except Exception as e:
+            raise RuntimeError(f"Failed to write documentation file: {e}")
 
     def search_docs(self, query: str, docs_dir: str) -> List[str]:
         """Search documentation using a natural language query (mock implementation)."""

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pydocenhancer"
-version = "0.1.0"
+version = "3.2.0"
 description = "AI-powered Python documentation enhancer supporting local LLMs (LLaMA, Ollama) and cloud providers."
 readme = "README.md"
 authors = [{name = "Abdoullah Ndao", email = "abdoullahaljersi@gmail.com"}]
@@ -12,16 +12,17 @@ license = {text = "MIT"}
 requires-python = ">=3.8"
 dependencies = [
     "sentence-transformers>=2.2.2",
-    "llama-cpp-python>=0.2.0",
     "click>=8.1.0",
 ]
 
 [project.optional-dependencies]
 cloud = ["openai>=1.0.0", "anthropic>=0.3.0"]
+local = ["ctransformers>=0.2.27"]
+llama = ["llama-cpp-python>=0.2.0"]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/pydocenhancer"
-Documentation = "https://pydocenhancer.readthedocs.io"
+Homepage = "https://github.com/utachicodes/PyDocEnhancer"
+Documentation = "https://github.com/utachicodes/PyDocEnhancer#readme"
 
 [project.scripts]
 pydocenhancer = "pydocenhancer.cli:main" 
