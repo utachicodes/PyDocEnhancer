@@ -1,0 +1,2 @@
+[console_scripts]
+pydocenhancer = pydocenhancer.cli:main
