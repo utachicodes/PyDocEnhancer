@@ -9,7 +9,7 @@ AI-powered Python plugin to enhance documentation with summaries, code explanati
 - **Auto-Generated Examples**: Create working code examples from docstrings.
 - **Automated Example Testing**: Extracts and runs code examples from docstrings, reporting results in the docs.
 - **Multilingual Documentation**: Generate documentation in multiple languages (e.g., English, French, Spanish, Chinese) using LLM translation.
-- **Local LLM Support**: Privacy-first processing with local models (e.g., LLaMA 3.2, ctransformers backend).
+- **Local LLM Support**: Privacy-first processing with local models (e.g., llama 3.2, ctransformers backend).
 - **Integrations**: Works with Sphinx, MkDocs, and Jupyter Notebooks.
 
 ## LLM Requirement
